@@ -1,0 +1,119 @@
+-- пиздец апи говно неудобное конечно
+--[[
+
+    В теории можно было бы для гета адрессов юзать функции самого никсвара, но я увидела их существование
+    уже после того как написала эту дичь
+
+    Идем далее, проверки - ну там впринципе некоторые можно резануть и секс будет, но мне лень вспоминать какая может нули вернуть, какая нет
+
+    Рендер написан за четверть секунды для экземпла, дальше сами уже разберетесь и поставите туда че надо
+
+]]
+
+-- дефный принт говно
+local oprint = print
+print = function(...)
+
+    if #{...} == 0 then
+        oprint("nil")
+        return
+    end
+
+    for k, v in ipairs({...}) do
+        oprint(tostring(v))
+    end
+end
+
+local muzzle = {}
+local ffi_handler = {}
+
+ffi.cdef[[
+
+    typedef struct {
+        float x;
+        float y;
+        float z;
+    } vec3_struct;
+
+    typedef void*(__thiscall* c_entity_list_get_client_entity_t)(void*, int);
+    typedef void*(__thiscall* c_entity_list_get_client_entity_from_handle_t)(void*, uintptr_t);
+
+    typedef int(__thiscall* c_weapon_get_muzzle_attachment_index_first_person_t)(void*, void*);
+    typedef bool(__thiscall* c_entity_get_attachment_t)(void*, int, vec3_struct*);
+]]
+
+ffi_handler.bind_argument = function(fn, arg)
+    return function(...)
+        return fn(arg, ...)
+    end
+end
+
+ffi_handler.interface_type = ffi.typeof("uintptr_t**")
+
+ffi_handler.i_client_entity_list = ffi.cast(ffi_handler.interface_type, se.create_interface("client.dll", "VClientEntityList003"))
+ffi_handler.get_client_entity = ffi_handler.bind_argument(ffi.cast("c_entity_list_get_client_entity_t", ffi_handler.i_client_entity_list[0][3]), ffi_handler.i_client_entity_list)
+
+muzzle.muzzle_attachment_index = 467
+muzzle.attachment_index = 83
+
+muzzle.pos = vec3_t.new(0, 0, 0)
+muzzle.active_weapon_offset = se.get_netvar("DT_BaseCombatCharacter", "m_hActiveWeapon") or error("Nigger error 1")
+muzzle.view_model_offset = se.get_netvar("DT_BasePlayer", "m_hViewModel") or error("Nigger error 2")
+
+muzzle.get = function() -- симулятор миллиона проверок шоб избежать все возможные краши, хотя по фактам тут половину проверок можно удалить и все
+
+    if not engine.is_connected() then return end
+
+    local me = entitylist.get_local_player()
+    if not me or not me:is_alive() then return end
+
+    local my_weapon = me:get_prop_int(muzzle.active_weapon_offset)
+    my_weapon = entitylist.get_entity_from_handle(my_weapon)
+    if not my_weapon then return end
+
+    local my_address = ffi_handler.get_client_entity(me:get_index())
+    if not my_address then return end
+
+    local my_weapon_address = ffi_handler.get_client_entity(my_weapon:get_index())
+    if not my_weapon_address then return end
+
+    local viewmodel = entitylist.get_entity_from_handle(me:get_prop_int(muzzle.view_model_offset))
+    if not viewmodel then return end
+
+    local viewmodel_ent = ffi_handler.get_client_entity(viewmodel:get_index())
+    if not viewmodel_ent then return end
+
+    local viewmodel_vtbl = ffi.cast(ffi_handler.interface_type, viewmodel_ent)[0]
+    local weapon_vtbl = ffi.cast(ffi_handler.interface_type, my_weapon_address)[0]
+
+    local get_viewmodel_attachment_fn = ffi.cast("c_entity_get_attachment_t", viewmodel_vtbl[muzzle.attachment_index])
+    local get_muzzle_attachment_index_fn = ffi.cast("c_weapon_get_muzzle_attachment_index_first_person_t", weapon_vtbl[muzzle.muzzle_attachment_index])
+
+    local muzzle_attachment_index = get_muzzle_attachment_index_fn(my_weapon_address, viewmodel_ent)
+
+    local ret = ffi.new("vec3_struct[1]")
+
+    local state = get_viewmodel_attachment_fn(viewmodel_ent, muzzle_attachment_index, ret)
+
+    return {state = state, pos = vec3_t.new(ret[0].x, ret[0].y, ret[0].z)}
+end
+
+
+local font = renderer.setup_font("C:/windows/fonts/tahomabd.ttf", 50, 0)
+local function on_paint()
+
+    local muzzle_temp = muzzle.get()
+
+    if muzzle_temp then
+        muzzle.pos = muzzle_temp.pos
+    end
+
+
+    local pos2d = se.world_to_screen(muzzle.pos)
+    if pos2d ~= nil then
+        renderer.text("Muzzle Pos", font, pos2d, 0, color_t.new(255, 255, 255, 255))
+    end
+
+end
+
+client.register_callback("paint", on_paint)
